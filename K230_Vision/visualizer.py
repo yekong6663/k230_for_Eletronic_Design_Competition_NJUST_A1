@@ -5,13 +5,10 @@
 所有绘制函数直接修改传入的 image 对象。
 
 用法:
-  from visualizer import draw_lane_hud, draw_lane_birdview
+  from visualizer import draw_lane_hud
 
   # 在原始图上叠加 HUD (文字 + ROI线 + 中心十字)
   draw_lane_hud(img, fps=50, mode="LANE", offset=-3.2, angle=1.5, valid=True)
-
-  # 获取鸟瞰图调试图 (点云 + 拟合曲线)
-  bird_viz = draw_lane_birdview(lane_detector)
 """
 
 import config
@@ -82,101 +79,95 @@ def draw_lane_hud(img, fps=0.0, mode="", offset=0.0, angle=0.0, valid=False):
 
 
 # ============================================================
-# 鸟瞰图叠加 — 车道线点云 + 拟合曲线
+# 鸟瞰图叠加 — 车道线点云 + 拟合曲线 (暂不使用, 需要时解除注释)
 # ============================================================
 
-
-def draw_lane_birdview(lane_detector):
-    """
-    在车道检测的鸟瞰图上叠加点云和拟合曲线
-
-    对 warped 灰度图 (Canny 边缘) 做副本，然后绘制:
-      - 左车道线点云 (中灰 128, 降低视觉干扰)
-      - 右车道线点云 (亮灰 192)
-      - 二次拟合曲线 (白 255)
-      - 车道中心线 (白 255)
-
-    参数:
-        lane_detector: LaneDetector 实例
-
-    返回:
-        Image: 带叠加层的灰度鸟瞰图副本
-        None:  无数据 (last_warped 为 None)
-    """
-    warped = lane_detector.last_warped
-    if warped is None:
-        return None
-
-    viz = warped.copy()
-
-    # -- 左车道线点云 (中灰小圆点) --
-    for x, y in lane_detector.last_left_pts:
-        if 0 <= x < viz.width() and 0 <= y < viz.height():
-            viz.draw_circle(x, y, 1, color=128, fill=True)
-
-    # -- 右车道线点云 (亮灰小圆点) --
-    for x, y in lane_detector.last_right_pts:
-        if 0 <= x < viz.width() and 0 <= y < viz.height():
-            viz.draw_circle(x, y, 1, color=192, fill=True)
-
-    # -- 拟合曲线 --
-    left_coeff  = lane_detector.last_left_coeff
-    right_coeff = lane_detector.last_right_coeff
-
-    if left_coeff is not None:
-        _DrawQuadratic(viz, left_coeff, val=255)
-    if right_coeff is not None:
-        _DrawQuadratic(viz, right_coeff, val=255)
-
-    # -- 车道中心线 --
-    if left_coeff is not None and right_coeff is not None:
-        a_l, b_l, c_l = left_coeff
-        a_r, b_r, c_r = right_coeff
-        prev_cx = prev_cy = None
-        for y in range(0, viz.height(), 3):
-            x_l = a_l * y * y + b_l * y + c_l
-            x_r = a_r * y * y + b_r * y + c_r
-            cx = int((x_l + x_r) / 2)
-            if 0 <= cx < viz.width():
-                if prev_cx is not None:
-                    viz.draw_line(prev_cx, prev_cy, cx, y, color=255, thickness=1)
-                prev_cx, prev_cy = cx, y
-
-    # -- 鸟瞰图水平中线 --
-    mid_y = viz.height() // 2
-    viz.draw_line(0, mid_y, viz.width(), mid_y, color=128, thickness=1)
-
-    return viz
-
-
-# ============================================================
-# 辅助函数
-# ============================================================
-
-
-def _DrawQuadratic(img, coeff, val=255):
-    """
-    在灰度图上用线段连接方式绘制 x = a·y² + b·y + c 曲线
-
-    参数:
-        img   : 灰度图
-        coeff : (a, b, c) 拟合系数
-        val   : 绘制灰度值
-    """
-    a, b, c = coeff
-    w = img.width()
-    h = img.height()
-    prev_x = None
-    prev_y = None
-
-    for y in range(0, h, 3):
-        x = int(a * y * y + b * y + c)
-        if 0 <= x < w:
-            if prev_x is not None:
-                img.draw_line(prev_x, prev_y, x, y, color=val, thickness=1)
-            prev_x, prev_y = x, y
-
-
-def _AngStr(angle_deg):
-    """角度值转显示字符串"""
-    return "%+.1fdeg" % angle_deg
+# def draw_lane_birdview(lane_detector):
+#     """
+#     在车道检测的鸟瞰图上叠加点云和拟合曲线
+#
+#     对 warped 灰度图 (Canny 边缘) 做副本，然后绘制:
+#       - 左车道线点云 (中灰 128, 降低视觉干扰)
+#       - 右车道线点云 (亮灰 192)
+#       - 二次拟合曲线 (白 255)
+#       - 车道中心线 (白 255)
+#
+#     参数:
+#         lane_detector: LaneDetector 实例
+#
+#     返回:
+#         Image: 带叠加层的灰度鸟瞰图副本
+#         None:  无数据 (last_warped 为 None)
+#     """
+#     warped = lane_detector.last_warped
+#     if warped is None:
+#         return None
+#
+#     viz = warped.copy()
+#
+#     # -- 左车道线点云 (中灰小圆点) --
+#     for x, y in lane_detector.last_left_pts:
+#         if 0 <= x < viz.width() and 0 <= y < viz.height():
+#             viz.draw_circle(x, y, 1, color=128, fill=True)
+#
+#     # -- 右车道线点云 (亮灰小圆点) --
+#     for x, y in lane_detector.last_right_pts:
+#         if 0 <= x < viz.width() and 0 <= y < viz.height():
+#             viz.draw_circle(x, y, 1, color=192, fill=True)
+#
+#     # -- 拟合曲线 --
+#     left_coeff  = lane_detector.last_left_coeff
+#     right_coeff = lane_detector.last_right_coeff
+#
+#     if left_coeff is not None:
+#         _DrawQuadratic(viz, left_coeff, val=255)
+#     if right_coeff is not None:
+#         _DrawQuadratic(viz, right_coeff, val=255)
+#
+#     # -- 车道中心线 --
+#     if left_coeff is not None and right_coeff is not None:
+#         a_l, b_l, c_l = left_coeff
+#         a_r, b_r, c_r = right_coeff
+#         prev_cx = prev_cy = None
+#         for y in range(0, viz.height(), 3):
+#             x_l = a_l * y * y + b_l * y + c_l
+#             x_r = a_r * y * y + b_r * y + c_r
+#             cx = int((x_l + x_r) / 2)
+#             if 0 <= cx < viz.width():
+#                 if prev_cx is not None:
+#                     viz.draw_line(prev_cx, prev_cy, cx, y, color=255, thickness=1)
+#                 prev_cx, prev_cy = cx, y
+#
+#     # -- 鸟瞰图水平中线 --
+#     mid_y = viz.height() // 2
+#     viz.draw_line(0, mid_y, viz.width(), mid_y, color=128, thickness=1)
+#
+#     return viz
+#
+#
+# # ============================================================
+# # 辅助函数 (鸟瞰图用, 暂不使用)
+# # ============================================================
+#
+#
+# def _DrawQuadratic(img, coeff, val=255):
+#     """
+#     在灰度图上用线段连接方式绘制 x = a·y² + b·y + c 曲线
+#
+#     参数:
+#         img   : 灰度图
+#         coeff : (a, b, c) 拟合系数
+#         val   : 绘制灰度值
+#     """
+#     a, b, c = coeff
+#     w = img.width()
+#     h = img.height()
+#     prev_x = None
+#     prev_y = None
+#
+#     for y in range(0, h, 3):
+#         x = int(a * y * y + b * y + c)
+#         if 0 <= x < w:
+#             if prev_x is not None:
+#                 img.draw_line(prev_x, prev_y, x, y, color=val, thickness=1)
+#             prev_x, prev_y = x, y

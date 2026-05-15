@@ -13,15 +13,35 @@
 """
 
 import struct
-from machine import UART
+from machine import UART, FPIOA
 import config
+
+
+def _InitUart():
+    """
+    初始化 UART: 先用 FPIOA 映射引脚, 再创建 UART 对象
+
+    必须先设置引脚功能再创建 UART 对象,
+    否则通讯无物理引脚对应, 数据无法收发。
+    """
+    fm = FPIOA()
+    fm.set_function(config.UART_TX, FPIOA.UART2_TXD)
+    fm.set_function(config.UART_RX, FPIOA.UART2_RXD)
+
+    return UART(
+        UART.UART2,
+        baudrate=config.UART_BAUD,
+        bits=UART.EIGHTBITS,
+        parity=UART.PARITY_NONE,
+        stop=UART.STOPBITS_ONE,
+    )
 
 
 class UartProtocol:
     """M0 ↔ K230 通讯协议封装"""
 
     def __init__(self):
-        self._uart = UART(config.UART_ID, baudrate=config.UART_BAUD)
+        self._uart = _InitUart()
 
     # ============================================================
     # 发送接口

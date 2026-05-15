@@ -11,6 +11,8 @@ FPS          = 50
 # --- UART 参数 ---
 UART_ID   = 1
 UART_BAUD = 115200
+UART_TX   = 11           # UART TX 引脚号 (需根据实际接线修改)
+UART_RX   = 12           # UART RX 引脚号 (需根据实际接线修改)
 
 # --- 帧头 ---
 FRAME_HEADER = 0xAA

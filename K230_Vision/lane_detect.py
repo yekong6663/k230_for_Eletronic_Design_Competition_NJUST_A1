@@ -11,6 +11,7 @@
 """
 
 import math
+import image
 import config
 from calib_data import homography
 from detector_base import Detector
@@ -35,8 +36,8 @@ class LaneDetector(Detector):
         self.last_left_coeff = None
         # 右车道线二次拟合系数 (a, b, c)，拟合失败时为 None
         self.last_right_coeff = None
-        # 最近一帧的鸟瞰图 (透视变换后的 Image 对象)
-        self.last_warped = None
+        # # 最近一帧的鸟瞰图 (透视变换后的 Image 对象) — 暂不使用
+        # self.last_warped = None
         # 左车道线提取的点云 [(x, y), ...]
         self.last_left_pts = []
         # 右车道线提取的点云 [(x, y), ...]
@@ -53,7 +54,7 @@ class LaneDetector(Detector):
         self._result = {"offset": 0.0, "angle": 0.0, "valid": False}
         self.last_left_coeff  = None
         self.last_right_coeff = None
-        self.last_warped      = None
+        # self.last_warped      = None
         self.last_left_pts    = []
         self.last_right_pts   = []
 
@@ -75,16 +76,21 @@ class LaneDetector(Detector):
 
         # ---- ② 透视变换: 斜视图 → 鸟瞰俯视图 ----
         warped = self._WarpPerspective(preprocessed)
-        self.last_warped = warped
+        # self.last_warped = warped
 
         # ---- ③ 逐行扫描提取左右车道线点云 ----
         left_pts, right_pts = self._ExtractLanePoints(warped)
         self.last_left_pts  = left_pts
         self.last_right_pts = right_pts
 
-        # ---- ④ 二次曲线拟合 ----
+        # ---- ④ 曲线拟合 (注释/解除注释切换方法) ----
+        # 二次拟合: x = a·y² + b·y + c  (弯道场景)
         left_coeff  = self._FitQuadratic(left_pts)
         right_coeff = self._FitQuadratic(right_pts)
+
+        # 直线回归: x = b·y + c  (直道场景, 更鲁棒)
+        # left_coeff  = self._FitLinear(left_pts)
+        # right_coeff = self._FitLinear(right_pts)
 
         self.last_left_coeff  = left_coeff
         self.last_right_coeff = right_coeff
@@ -92,7 +98,7 @@ class LaneDetector(Detector):
         # ---- ⑤ 计算 offset 与 angle ----
         if left_coeff is not None and right_coeff is not None:
             offset, angle = self._CalcDualLane(
-                left_coeff, right_coeff, warped.width()
+                left_coeff, right_coeff, warped.width(), warped.height()
             )
             valid = True
         else:
@@ -116,7 +122,7 @@ class LaneDetector(Detector):
         self._result = {"offset": 0.0, "angle": 0.0, "valid": False}
         self.last_left_coeff  = None
         self.last_right_coeff = None
-        self.last_warped      = None
+        # self.last_warped      = None
         self.last_left_pts    = []
         self.last_right_pts   = []
 
@@ -145,8 +151,11 @@ class LaneDetector(Detector):
             return None
 
         roi = img.copy(roi=(x_start, y_start, w, h))
+        # 高斯模糊
         roi.gaussian(config.GAUSSIAN_KERNEL)
+        # 灰度化
         gray = roi.to_grayscale()
+        # 利用Canny算子寻找边缘
         return gray.find_edges(
             image.EDGE_CANNY,
             threshold=(config.CANNY_LOW, config.CANNY_HIGH)
@@ -154,10 +163,11 @@ class LaneDetector(Detector):
 
     def _WarpPerspective(self, img):
         """透视变换 → 鸟瞰图 (标定数据未填入时退化为原图)"""
-        try:
-            return img.warp_perspective(homography.H_MATRIX)
-        except Exception:
-            return img
+        # try:
+        #     return img.warp_perspective(homography.H_MATRIX)
+        # except Exception:
+        #     return img
+        return img
 
     # ================================================================
     # 点云提取 & 拟合
@@ -176,6 +186,7 @@ class LaneDetector(Detector):
         left_pts  = []
         right_pts = []
 
+        # 遍历所有点
         for y in range(h):
             edge_xs = []
             for x in range(w):
@@ -185,6 +196,7 @@ class LaneDetector(Detector):
             if len(edge_xs) == 0:
                 continue
 
+            # 取出最左（[0]）和最左右（[-1]）
             leftmost  = edge_xs[0]
             rightmost = edge_xs[-1]
 
@@ -253,30 +265,76 @@ class LaneDetector(Detector):
             + sum_x   * (sum_y  * sum_y3  - sum_y2 * sum_y2)
         )
 
-        if abs(a) > 0.005:
-            return None
+        # 一般使用鸟瞰图的话a会很小
+        # if abs(a) > 0.005:
+        #     return None
         return (a, b, c)
+
+    def _FitLinear(self, points):
+        """
+        最小二乘直线拟合 x = b·y + c
+
+        求解正规方程 (2×2 克莱姆法则):
+          n·c + sum_y·b = sum_x
+          sum_y·c + sum_y2·b = sum_xy
+
+        返回 (0.0, b, c), a=0 保持与 _CalcDualLane 兼容。
+        """
+        if len(points) < config.FIT_MIN_POINTS:
+            return None
+
+        n = len(points)
+        sum_y = sum_y2 = 0.0
+        sum_x = sum_xy = 0.0
+
+        for x, y_coord in points:
+            y_f = float(y_coord)
+            sum_y  += y_f
+            sum_y2 += y_f * y_f
+            sum_x  += x
+            sum_xy += x * y_f
+
+        det = n * sum_y2 - sum_y * sum_y
+
+        if abs(det) < 1e-12:
+            return None
+
+        inv_det = 1.0 / det
+        c = (sum_x * sum_y2 - sum_y * sum_xy) * inv_det
+        b = (n * sum_xy - sum_y * sum_x) * inv_det
+
+        return (0.0, b, c)
 
     # ================================================================
     # 偏差计算
     # ================================================================
 
-    def _CalcDualLane(self, left_coeff, right_coeff, img_w):
+    def _CalcDualLane(self, left_coeff, right_coeff, img_w, img_h):
         """
-        双线模式: 用左右车道线的拟合系数计算 offset 与 angle
+        双线模式: 用图像底部 (近场, y = h-1) 的值计算 offset 与 angle
 
-        offset = (cL + cR) / 2 - 图像中心  → 转为 mm
-        angle  = atan((bL + bR) / 2)        → 转为 °
+        在近场求值而非 y=0 (远场)，消除控制滞后。
+        x = a·y² + b·y + c,  导数 dx/dy = 2a·y + b
         """
         a_l, b_l, c_l = left_coeff
         a_r, b_r, c_r = right_coeff
 
-        lane_center_px = (c_l + c_r) / 2.0
+        y_near = float(img_h - 1)           # 图像最底部 = 车身最近处
+
+        # 近场 x 坐标
+        x_l = a_l * y_near * y_near + b_l * y_near + c_l
+        x_r = a_r * y_near * y_near + b_r * y_near + c_r
+
+        lane_center_px = (x_l + x_r) / 2.0
         image_center_px = img_w / 2.0
         offset_px = lane_center_px - image_center_px
 
         offset_mm = offset_px * config.MM_PER_PIXEL
-        angle_rad = math.atan((b_l + b_r) / 2.0)
+
+        # 近场导数 (切线方向)
+        dx_l = 2.0 * a_l * y_near + b_l
+        dx_r = 2.0 * a_r * y_near + b_r
+        angle_rad = math.atan((dx_l + dx_r) / 2.0)
         angle_deg = math.degrees(angle_rad)
 
         return offset_mm, angle_deg
