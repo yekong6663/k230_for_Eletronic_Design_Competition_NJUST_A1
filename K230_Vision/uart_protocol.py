@@ -57,6 +57,15 @@ class UartProtocol:
         data = struct.pack("<ffB", offset, angle, 1 if valid else 0)
         self._SendFrame(0x01, data)
 
+    def SendIntersection(self, itype, direction):
+        """
+        发送路口检测帧 (0x02, 5 字节)
+        itype     : int, 0=无, 1=十字, 2=T字左, 3=T字右
+        direction : int, 0=无, 1=左转, 2=右转, 3=直行
+        """
+        data = struct.pack("<BB", itype, direction)
+        self._SendFrame(0x02, data)
+
     # ============================================================
     # 接收接口
     # ============================================================

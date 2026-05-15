@@ -32,7 +32,8 @@ COLOR_BLACK   = (0, 0, 0)
 # ============================================================
 
 
-def draw_lane_hud(img, fps=0.0, mode="", offset=0.0, angle=0.0, valid=False):
+def draw_lane_hud(img, fps=0.0, mode="", offset=0.0, angle=0.0,
+                  valid=False, intersection=0):
     """
     在原始图上绘制车道线检测的 HUD 信息
 
@@ -41,15 +42,19 @@ def draw_lane_hud(img, fps=0.0, mode="", offset=0.0, angle=0.0, valid=False):
       - 左上角 FPS / Mode / Offset / Angle 文字
       - 图像中心十字线
       - 丢线时显示红色 INVALID 警告
+      - 路口检测时显示类型文字 (橙色)
 
     参数:
-        img    : 原始 RGB565 图像 (sensor.snapshot 返回的对象)
-        fps    : 当前帧率
-        mode   : 当前工作模式名 (如 "LANE")
-        offset : 车道偏移 (mm), 正=偏右, 负=偏左
-        angle  : 车身朝向角 (°)
-        valid  : 本帧检测是否有效
+        img          : 原始 RGB565 图像
+        fps          : 当前帧率
+        mode         : 当前工作模式名 (如 "LANE")
+        offset       : 车道偏移 (mm), 正=偏右, 负=偏左
+        angle        : 车身朝向角 (°)
+        valid        : 本帧检测是否有效
+        intersection : 路口类型 0=无, 1=十字, 2=T字左, 3=T字右
     """
+    INTER_NAMES = {0: "", 1: "CROSS", 2: "T-LEFT", 3: "T-RIGHT"}
+
     w = config.IMAGE_WIDTH
     h = config.IMAGE_HEIGHT
 
@@ -69,13 +74,56 @@ def draw_lane_hud(img, fps=0.0, mode="", offset=0.0, angle=0.0, valid=False):
         y += 10
         img.draw_string(2, y, "Ang:%+.1fdeg" % angle,
                         color=COLOR_GREEN, scale=1)
+        y += 10
     else:
         img.draw_string(2, y, "INVALID", color=COLOR_RED, scale=1)
+        y += 10
+
+    # -- 路口提示 --
+    if intersection > 0:
+        img.draw_string(2, y, "INT:%s" % INTER_NAMES.get(intersection, "?"),
+                        color=COLOR_ORANGE, scale=1)
 
     # -- 图像中心十字 --
     cx = w // 2
     cy = h // 2
     img.draw_cross(cx, cy, color=COLOR_WHITE, size=8, thickness=1)
+
+
+# ============================================================
+# 路口检测调试 (暂不使用, 需要时解除注释)
+# ============================================================
+
+# def draw_intersection_debug(img, lane_detector):
+#     """
+#     在原始图上绘制路口检测的调试图层
+#
+#     绘制内容:
+#       - 扫描区域上边界 (蓝色虚线)
+#       - 检测到黑线时在远场画红色带
+#       - 右上角暗行统计
+#
+#     参数:
+#         img            : 原始 RGB565 图像
+#         lane_detector  : LaneDetector 实例 (需有 scan_debug 属性)
+#     """
+#     h = config.IMAGE_HEIGHT
+#     w = config.IMAGE_WIDTH
+#
+#     # 扫描区域上边界 (ROI 的 1/3 处)
+#     y_roi = int(h * config.ROI_Y_START_RATIO)
+#     roi_h = int(h * config.ROI_Y_END_RATIO) - y_roi
+#     y_scan_end = y_roi + roi_h // 3
+#     img.draw_line(0, y_scan_end, w, y_scan_end,
+#                   color=COLOR_BLUE, thickness=1)
+#
+#     # 如果检测到黑线, 在对应区域画红色覆盖带
+#     # (需要 lane_detector 暴露 dark_rows_start / dark_rows_end)
+#     # if hasattr(lane_detector, '_dark_y_start'):
+#     #     dy0 = y_roi + lane_detector._dark_y_start
+#     #     dy1 = y_roi + lane_detector._dark_y_end
+#     #     for y in range(dy0, dy1, 2):
+#     #         img.draw_line(0, y, w, y, color=COLOR_RED, thickness=1)
 
 
 # ============================================================

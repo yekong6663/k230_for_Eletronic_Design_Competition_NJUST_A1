@@ -168,6 +168,15 @@ def Main():
                 # 丢线 → 发送无效标记 (M0 侧根据 valid 做降速/停车)
                 uart.SendLane(0.0, 0.0, False)
 
+            # ---- ②.5 路口检测 (独立模块, 后台持续运行) ----
+            inter_result = inter.Process(
+                img, lane.last_left_coeff, lane.last_right_coeff
+            )
+            inter_type = 0
+            if inter_result is not None:
+                inter_type, inter_dir = inter_result
+                uart.SendIntersection(inter_type, inter_dir)
+
             # ========================================================
             # TODO: 以下为后续接入其他检测器的代码框架
             # ========================================================
@@ -177,16 +186,6 @@ def Main():
             #     light_result = light.Process(img)
             #     if light_result is not None:
             #         uart.SendLight(light_result)
-            #
-            # elif mode == "INTER":
-            #     # 路口检测 (读取车道线拟合中间结果)
-            #     inter_result = inter.Process(
-            #         lane.last_warped,
-            #         lane.last_left_coeff,
-            #         lane.last_right_coeff
-            #     )
-            #     if inter_result is not None:
-            #         uart.SendIntersection(*inter_result)
             #
             # elif mode == "PARK":
             #     # 停车位检测
@@ -211,6 +210,7 @@ def Main():
                     offset=lane_result["offset"],
                     angle=lane_result["angle"],
                     valid=lane_result["valid"],
+                    intersection=inter_type,
                 )
 
             # ---- ④ 接收 M0 指令，切换工作模式 ----

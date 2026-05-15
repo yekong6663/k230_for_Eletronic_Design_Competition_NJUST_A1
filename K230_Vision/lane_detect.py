@@ -7,7 +7,7 @@
 
 算法管线:
   原始图 → ROI裁剪 → 高斯滤波 → 转灰度 → Canny边缘检测 → 透视变换(鸟瞰)
-  → 逐行扫描提取左右点云 → 二次曲线拟合 → 计算offset/angle/valid
+  → 逐行扫描提取左右点云 → 曲线拟合 → 计算offset/angle/valid
 """
 
 import math
@@ -21,26 +21,18 @@ class LaneDetector(Detector):
     """双线车道线检测器，继承自 Detector 基类"""
 
     def __init__(self):
-        # 调用基类构造，设置名称
         super().__init__(name="LaneDetector")
 
-        # 连续丢线的帧数计数器
-        # 双线有效时清零，丢线时累加
         self._consecutive_invalid = 0
 
-        # 最新结果缓存
         self._result = {"offset": 0.0, "angle": 0.0, "valid": False}
 
         # ---- 供路口检测模块 / 可视化复用的中间结果 ----
-        # 左车道线二次拟合系数 (a, b, c)，拟合失败时为 None
         self.last_left_coeff = None
-        # 右车道线二次拟合系数 (a, b, c)，拟合失败时为 None
         self.last_right_coeff = None
-        # # 最近一帧的鸟瞰图 (透视变换后的 Image 对象) — 暂不使用
+        # # 最近一帧的鸟瞰图 — 暂不使用
         # self.last_warped = None
-        # 左车道线提取的点云 [(x, y), ...]
         self.last_left_pts = []
-        # 右车道线提取的点云 [(x, y), ...]
         self.last_right_pts = []
 
     # ================================================================
@@ -48,7 +40,6 @@ class LaneDetector(Detector):
     # ================================================================
 
     def Init(self):
-        """初始化车道线检测器内部状态"""
         super().Init()
         self._consecutive_invalid = 0
         self._result = {"offset": 0.0, "angle": 0.0, "valid": False}
@@ -62,11 +53,7 @@ class LaneDetector(Detector):
         """
         对一帧图像执行完整的车道线检测管线
 
-        参数:
-            img: OpenMV image 对象 (RGB565, QVGA)
-
-        返回:
-            dict: {"offset": float, "angle": float, "valid": bool}
+        返回: {"offset": float, "angle": float, "valid": bool}
         """
         # ---- ① 预处理: ROI → 高斯 → 灰度 → Canny ----
         preprocessed = self._Preprocess(img)
@@ -74,7 +61,7 @@ class LaneDetector(Detector):
             self._HandleInvalid()
             return self._result
 
-        # ---- ② 透视变换: 斜视图 → 鸟瞰俯视图 ----
+        # ---- ② 透视变换 ----
         warped = self._WarpPerspective(preprocessed)
         # self.last_warped = warped
 
@@ -83,7 +70,7 @@ class LaneDetector(Detector):
         self.last_left_pts  = left_pts
         self.last_right_pts = right_pts
 
-        # ---- ④ 曲线拟合 (注释/解除注释切换方法) ----
+        # ---- ④ 曲线拟合 ----
         # 二次拟合: x = a·y² + b·y + c  (弯道场景)
         left_coeff  = self._FitQuadratic(left_pts)
         right_coeff = self._FitQuadratic(right_pts)
@@ -117,7 +104,6 @@ class LaneDetector(Detector):
         return self._result
 
     def Reset(self):
-        """重置车道线检测器: 清空计数器与中间结果"""
         self._consecutive_invalid = 0
         self._result = {"offset": 0.0, "angle": 0.0, "valid": False}
         self.last_left_coeff  = None
@@ -131,17 +117,7 @@ class LaneDetector(Detector):
     # ================================================================
 
     def _Preprocess(self, img):
-        """
-        ROI 裁剪 → 高斯滤波 → 转灰度 → Canny 边缘检测
-
-        参数:
-            img: 原始图像 (RGB565, QVGA)
-
-        返回:
-            Image: Canny 边缘图 (单通道, 255=边缘, 0=背景)
-            None:   ROI 区域不合法
-        """
-        # ROI 裁剪: x 全宽, y 取 40%~95%
+        """ROI 裁剪 → 高斯滤波 → 转灰度 → Canny 边缘检测"""
         x_start = 0
         y_start = int(config.IMAGE_HEIGHT * config.ROI_Y_START_RATIO)
         w       = config.IMAGE_WIDTH
@@ -151,11 +127,8 @@ class LaneDetector(Detector):
             return None
 
         roi = img.copy(roi=(x_start, y_start, w, h))
-        # 高斯模糊
         roi.gaussian(config.GAUSSIAN_KERNEL)
-        # 灰度化
         gray = roi.to_grayscale()
-        # 利用Canny算子寻找边缘
         return gray.find_edges(
             image.EDGE_CANNY,
             threshold=(config.CANNY_LOW, config.CANNY_HIGH)
@@ -174,11 +147,7 @@ class LaneDetector(Detector):
     # ================================================================
 
     def _ExtractLanePoints(self, warped):
-        """
-        逐行扫描鸟瞰图，提取左右车道线边缘点云
-
-        每行取最左、最右边缘像素，按图像中线分左右。
-        """
+        """逐行扫描鸟瞰图，提取左右车道线边缘点云"""
         w = warped.width()
         h = warped.height()
         mid_x = w // 2
@@ -186,7 +155,6 @@ class LaneDetector(Detector):
         left_pts  = []
         right_pts = []
 
-        # 遍历所有点
         for y in range(h):
             edge_xs = []
             for x in range(w):
@@ -196,7 +164,6 @@ class LaneDetector(Detector):
             if len(edge_xs) == 0:
                 continue
 
-            # 取出最左（[0]）和最左右（[-1]）
             leftmost  = edge_xs[0]
             rightmost = edge_xs[-1]
 
@@ -208,12 +175,7 @@ class LaneDetector(Detector):
         return left_pts, right_pts
 
     def _FitQuadratic(self, points):
-        """
-        最小二乘拟合 x = a·y² + b·y + c
-
-        求解方法: 克莱姆法则解 3×3 正规方程。
-        返回 (a, b, c) 或 None (点数不足 / 行列式为零 / 曲率异常)。
-        """
+        """最小二乘拟合 x = a·y² + b·y + c, 克莱姆法则求解"""
         if len(points) < config.FIT_MIN_POINTS:
             return None
 
@@ -232,7 +194,6 @@ class LaneDetector(Detector):
             sum_xy  += x * y_f
             sum_xy2 += x * y2
 
-        # 系数矩阵行列式 (按第一行展开)
         det = (
               n       * (sum_y2 * sum_y4 - sum_y3 * sum_y3)
             - sum_y   * (sum_y  * sum_y4 - sum_y3 * sum_y2)
@@ -244,42 +205,30 @@ class LaneDetector(Detector):
 
         inv_det = 1.0 / det
 
-        # 克莱姆法则求解 c (截距)
         c = inv_det * (
               sum_x   * (sum_y2 * sum_y4 - sum_y3 * sum_y3)
             - sum_y   * (sum_xy  * sum_y4 - sum_xy2 * sum_y3)
             + sum_y2  * (sum_xy  * sum_y3 - sum_xy2 * sum_y2)
         )
 
-        # 克莱姆法则求解 b (斜率)
         b = inv_det * (
               n       * (sum_xy  * sum_y4 - sum_xy2 * sum_y3)
             - sum_x   * (sum_y   * sum_y4 - sum_y3  * sum_y2)
             + sum_y2  * (sum_y   * sum_xy2 - sum_xy * sum_y3)
         )
 
-        # 克莱姆法则求解 a (曲率)
         a = inv_det * (
               n       * (sum_y2 * sum_xy2 - sum_y3 * sum_xy)
             - sum_y   * (sum_y  * sum_xy2 - sum_xy * sum_y3)
             + sum_x   * (sum_y  * sum_y3  - sum_y2 * sum_y2)
         )
 
-        # 一般使用鸟瞰图的话a会很小
         # if abs(a) > 0.005:
         #     return None
         return (a, b, c)
 
     def _FitLinear(self, points):
-        """
-        最小二乘直线拟合 x = b·y + c
-
-        求解正规方程 (2×2 克莱姆法则):
-          n·c + sum_y·b = sum_x
-          sum_y·c + sum_y2·b = sum_xy
-
-        返回 (0.0, b, c), a=0 保持与 _CalcDualLane 兼容。
-        """
+        """最小二乘直线拟合 x = b·y + c, 2×2 克莱姆法则"""
         if len(points) < config.FIT_MIN_POINTS:
             return None
 
@@ -310,18 +259,12 @@ class LaneDetector(Detector):
     # ================================================================
 
     def _CalcDualLane(self, left_coeff, right_coeff, img_w, img_h):
-        """
-        双线模式: 用图像底部 (近场, y = h-1) 的值计算 offset 与 angle
-
-        在近场求值而非 y=0 (远场)，消除控制滞后。
-        x = a·y² + b·y + c,  导数 dx/dy = 2a·y + b
-        """
+        """用图像底部 (近场, y=h-1) 的值计算 offset 与 angle"""
         a_l, b_l, c_l = left_coeff
         a_r, b_r, c_r = right_coeff
 
-        y_near = float(img_h - 1)           # 图像最底部 = 车身最近处
+        y_near = float(img_h - 1)
 
-        # 近场 x 坐标
         x_l = a_l * y_near * y_near + b_l * y_near + c_l
         x_r = a_r * y_near * y_near + b_r * y_near + c_r
 
@@ -331,7 +274,6 @@ class LaneDetector(Detector):
 
         offset_mm = offset_px * config.MM_PER_PIXEL
 
-        # 近场导数 (切线方向)
         dx_l = 2.0 * a_l * y_near + b_l
         dx_r = 2.0 * a_r * y_near + b_r
         angle_rad = math.atan((dx_l + dx_r) / 2.0)
@@ -344,7 +286,6 @@ class LaneDetector(Detector):
     # ================================================================
 
     def _HandleInvalid(self):
-        """预处理失败时的丢线处理: 累加丢线计数，清除中间结果"""
         self._consecutive_invalid += 1
         self.last_left_coeff  = None
         self.last_right_coeff = None
