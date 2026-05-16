@@ -5,6 +5,7 @@
   RGB → HSV → 颜色分割(红/绿) → 形态学开运算 → 面积滤波 → 多帧确认
   - 红色跨 0°: HSV(0~10) ∪ HSV(170~180)
   - 绿色: HSV(35~85)
+  - 以后加入标识，主要是转弯方向和相关禁行/限速
 
 帧格式 (0x03):
   | 0xAA | 0x03 | light_status(1B) | reserved(1B) | XOR |
@@ -56,3 +57,7 @@ class TrafficLightDetector(Detector):
         self._result = {"status": 0}
         self._frames_red   = 0
         self._frames_green = 0
+
+    def SendToUart(self):
+        """发送红绿灯检测结果 (待实现)"""
+        pass

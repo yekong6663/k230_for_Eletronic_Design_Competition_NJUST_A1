@@ -1,30 +1,27 @@
 """
 可视化调试模块
 
-在图像上绘制检测结果的叠加层，方便测试时观察算法中间结果。
+在灰度图像上绘制检测结果的叠加层，方便测试时观察算法中间结果。
 所有绘制函数直接修改传入的 image 对象。
 
 用法:
-  from visualizer import draw_lane_hud
+  from visualizer import draw_lane_hud, draw_lane_overlay
 
-  # 在原始图上叠加 HUD (文字 + ROI线 + 中心十字)
-  draw_lane_hud(img, fps=50, mode="LANE", offset=-3.2, angle=1.5, valid=True)
+  draw_lane_hud(img, fps=90, mode="LANE", offset=-3.2, angle=1.5, valid=True)
+  draw_lane_overlay(img, lane_detector)
 """
 
 import config
 
 # ============================================================
-# 颜色常量 (RGB565 三元组)
+# 灰度常量 (0=黑, 255=白)
 # ============================================================
 
-COLOR_GREEN   = (0, 255, 0)
-COLOR_RED     = (255, 0, 0)
-COLOR_BLUE    = (0, 0, 255)
-COLOR_YELLOW  = (255, 255, 0)
-COLOR_CYAN    = (0, 255, 255)
-COLOR_WHITE   = (255, 255, 255)
-COLOR_ORANGE  = (255, 165, 0)
-COLOR_BLACK   = (0, 0, 0)
+GRAY_WHITE   = 255
+GRAY_LIGHT   = 200
+GRAY_MEDIUM  = 128
+GRAY_DARK    = 60
+GRAY_BLACK   = 0
 
 
 # ============================================================
@@ -35,17 +32,16 @@ COLOR_BLACK   = (0, 0, 0)
 def draw_lane_hud(img, fps=0.0, mode="", offset=0.0, angle=0.0,
                   valid=False, intersection=0):
     """
-    在原始图上绘制车道线检测的 HUD 信息
+    在灰度图上绘制车道线检测的 HUD 信息
 
     绘制内容:
-      - 黄色横线标记 ROI 起始位置
       - 左上角 FPS / Mode / Offset / Angle 文字
       - 图像中心十字线
-      - 丢线时显示红色 INVALID 警告
-      - 路口检测时显示类型文字 (橙色)
+      - 丢线时显示 INVALID 警告
+      - 路口检测时显示类型文字
 
     参数:
-        img          : 原始 RGB565 图像
+        img          : 灰度图 (GRAYSCALE)
         fps          : 当前帧率
         mode         : 当前工作模式名 (如 "LANE")
         offset       : 车道偏移 (mm), 正=偏右, 负=偏左
@@ -58,164 +54,151 @@ def draw_lane_hud(img, fps=0.0, mode="", offset=0.0, angle=0.0,
     w = config.IMAGE_WIDTH
     h = config.IMAGE_HEIGHT
 
-    # -- ROI 起始线 --
-    y_roi = int(h * config.ROI_Y_START_RATIO)
-    img.draw_line(0, y_roi, w, y_roi, color=COLOR_YELLOW, thickness=1)
-
-    # -- HUD 文字 (左上角, 行间距 10px) --
+    # -- HUD 文字 (左上角, 字号 12, 行间距 14px) --
+    FONT_SIZE = 12
     y = 2
-    img.draw_string(2, y, "FPS:%.1f" % fps, color=COLOR_GREEN, scale=1)
-    y += 10
-    img.draw_string(2, y, "Mode:%s" % mode, color=COLOR_CYAN, scale=1)
-    y += 10
+    img.draw_string_advanced(2, y, FONT_SIZE,
+                              "FPS:%.1f" % fps, color=GRAY_LIGHT)
+    y += 14
+    img.draw_string_advanced(2, y, FONT_SIZE,
+                              "Mode:%s" % mode, color=GRAY_MEDIUM)
+    y += 14
 
     if valid:
-        img.draw_string(2, y, "Off:%+.1fmm" % offset, color=COLOR_GREEN, scale=1)
-        y += 10
-        img.draw_string(2, y, "Ang:%+.1fdeg" % angle,
-                        color=COLOR_GREEN, scale=1)
-        y += 10
+        img.draw_string_advanced(2, y, FONT_SIZE,
+                                  "Off:%+.1fpx" % offset, color=GRAY_LIGHT)
+        y += 14
+        img.draw_string_advanced(2, y, FONT_SIZE,
+                                  "Ang:%+.1fdeg" % angle, color=GRAY_LIGHT)
+        y += 14
     else:
-        img.draw_string(2, y, "INVALID", color=COLOR_RED, scale=1)
-        y += 10
+        img.draw_string_advanced(2, y, FONT_SIZE,
+                                  "INVALID", color=GRAY_WHITE)
+        y += 14
 
     # -- 路口提示 --
     if intersection > 0:
-        img.draw_string(2, y, "INT:%s" % INTER_NAMES.get(intersection, "?"),
-                        color=COLOR_ORANGE, scale=1)
+        img.draw_string_advanced(2, y, FONT_SIZE,
+                                 "INT:%s" % INTER_NAMES.get(intersection, "?"),
+                                 color=GRAY_WHITE)
 
     # -- 图像中心十字 --
     cx = w // 2
     cy = h // 2
-    img.draw_cross(cx, cy, color=COLOR_WHITE, size=8, thickness=1)
+    img.draw_cross(cx, cy, color=GRAY_WHITE, size=8, thickness=1)
 
 
 # ============================================================
-# 路口检测调试 (暂不使用, 需要时解除注释)
+# 车道线叠加 — 中线点 + 拟合线
 # ============================================================
 
-# def draw_intersection_debug(img, lane_detector):
-#     """
-#     在原始图上绘制路口检测的调试图层
-#
-#     绘制内容:
-#       - 扫描区域上边界 (蓝色虚线)
-#       - 检测到黑线时在远场画红色带
-#       - 右上角暗行统计
-#
-#     参数:
-#         img            : 原始 RGB565 图像
-#         lane_detector  : LaneDetector 实例 (需有 scan_debug 属性)
-#     """
-#     h = config.IMAGE_HEIGHT
-#     w = config.IMAGE_WIDTH
-#
-#     # 扫描区域上边界 (ROI 的 1/3 处)
-#     y_roi = int(h * config.ROI_Y_START_RATIO)
-#     roi_h = int(h * config.ROI_Y_END_RATIO) - y_roi
-#     y_scan_end = y_roi + roi_h // 3
-#     img.draw_line(0, y_scan_end, w, y_scan_end,
-#                   color=COLOR_BLUE, thickness=1)
-#
-#     # 如果检测到黑线, 在对应区域画红色覆盖带
-#     # (需要 lane_detector 暴露 dark_rows_start / dark_rows_end)
-#     # if hasattr(lane_detector, '_dark_y_start'):
-#     #     dy0 = y_roi + lane_detector._dark_y_start
-#     #     dy1 = y_roi + lane_detector._dark_y_end
-#     #     for y in range(dy0, dy1, 2):
-#     #         img.draw_line(0, y, w, y, color=COLOR_RED, thickness=1)
+
+def draw_lane_overlay(img, lane_detector):
+    """
+    在灰度图上叠加车道检测的中间结果
+
+    绘制内容:
+      - 左/右车道线追踪点 (暗灰点, 不干扰二值化结果)
+      - 中线点 (中灰点)
+      - 拟合后的中线 (白线)
+
+    参数:
+        img            : 已二值化的灰度图
+        lane_detector  : LaneDetector 实例
+    """
+    # -- 左车道线追踪点 --
+    for x, y in lane_detector.last_left_pts:
+        if 0 <= x < img.width() and 0 <= y < img.height():
+            img.set_pixel(x, y, GRAY_DARK)
+
+    # -- 右车道线追踪点 --
+    for x, y in lane_detector.last_right_pts:
+        if 0 <= x < img.width() and 0 <= y < img.height():
+            img.set_pixel(x, y, GRAY_DARK)
+
+    # -- 中线点 --
+    for x, y in lane_detector.last_mid_pts:
+        if 0 <= x < img.width() and 0 <= y < img.height():
+            img.set_pixel(x, y, GRAY_MEDIUM)
+
+    # -- 拟合中线: x = k·y + b --
+    k = lane_detector.last_k
+    b = lane_detector.last_b
+    if k != 0.0 or b != 0.0:
+        h = img.height()
+        w = img.width()
+        prev_xi = None
+        for y in range(0, h, 3):
+            xi = int(k * y + b)
+            if 0 <= xi < w:
+                if prev_xi is not None:
+                    img.draw_line(prev_xi, y - 3, xi, y,
+                                  color=GRAY_WHITE, thickness=1)
+                prev_xi = xi
+
+    # -- 底部中线预测点 (大十字标记) --
+    if k != 0.0 or b != 0.0:
+        y_bottom = img.height() - 1
+        x_bottom = int(k * y_bottom + b)
+        if 0 <= x_bottom < img.width():
+            img.draw_cross(x_bottom, y_bottom, color=GRAY_WHITE,
+                           size=6, thickness=1)
 
 
 # ============================================================
-# 鸟瞰图叠加 — 车道线点云 + 拟合曲线 (暂不使用, 需要时解除注释)
+# 路口检测框叠加
 # ============================================================
 
-# def draw_lane_birdview(lane_detector):
-#     """
-#     在车道检测的鸟瞰图上叠加点云和拟合曲线
-#
-#     对 warped 灰度图 (Canny 边缘) 做副本，然后绘制:
-#       - 左车道线点云 (中灰 128, 降低视觉干扰)
-#       - 右车道线点云 (亮灰 192)
-#       - 二次拟合曲线 (白 255)
-#       - 车道中心线 (白 255)
-#
-#     参数:
-#         lane_detector: LaneDetector 实例
-#
-#     返回:
-#         Image: 带叠加层的灰度鸟瞰图副本
-#         None:  无数据 (last_warped 为 None)
-#     """
-#     warped = lane_detector.last_warped
-#     if warped is None:
-#         return None
-#
-#     viz = warped.copy()
-#
-#     # -- 左车道线点云 (中灰小圆点) --
-#     for x, y in lane_detector.last_left_pts:
-#         if 0 <= x < viz.width() and 0 <= y < viz.height():
-#             viz.draw_circle(x, y, 1, color=128, fill=True)
-#
-#     # -- 右车道线点云 (亮灰小圆点) --
-#     for x, y in lane_detector.last_right_pts:
-#         if 0 <= x < viz.width() and 0 <= y < viz.height():
-#             viz.draw_circle(x, y, 1, color=192, fill=True)
-#
-#     # -- 拟合曲线 --
-#     left_coeff  = lane_detector.last_left_coeff
-#     right_coeff = lane_detector.last_right_coeff
-#
-#     if left_coeff is not None:
-#         _DrawQuadratic(viz, left_coeff, val=255)
-#     if right_coeff is not None:
-#         _DrawQuadratic(viz, right_coeff, val=255)
-#
-#     # -- 车道中心线 --
-#     if left_coeff is not None and right_coeff is not None:
-#         a_l, b_l, c_l = left_coeff
-#         a_r, b_r, c_r = right_coeff
-#         prev_cx = prev_cy = None
-#         for y in range(0, viz.height(), 3):
-#             x_l = a_l * y * y + b_l * y + c_l
-#             x_r = a_r * y * y + b_r * y + c_r
-#             cx = int((x_l + x_r) / 2)
-#             if 0 <= cx < viz.width():
-#                 if prev_cx is not None:
-#                     viz.draw_line(prev_cx, prev_cy, cx, y, color=255, thickness=1)
-#                 prev_cx, prev_cy = cx, y
-#
-#     # -- 鸟瞰图水平中线 --
-#     mid_y = viz.height() // 2
-#     viz.draw_line(0, mid_y, viz.width(), mid_y, color=128, thickness=1)
-#
-#     return viz
-#
-#
-# # ============================================================
-# # 辅助函数 (鸟瞰图用, 暂不使用)
-# # ============================================================
-#
-#
-# def _DrawQuadratic(img, coeff, val=255):
-#     """
-#     在灰度图上用线段连接方式绘制 x = a·y² + b·y + c 曲线
-#
-#     参数:
-#         img   : 灰度图
-#         coeff : (a, b, c) 拟合系数
-#         val   : 绘制灰度值
-#     """
-#     a, b, c = coeff
-#     w = img.width()
-#     h = img.height()
-#     prev_x = None
-#     prev_y = None
-#
-#     for y in range(0, h, 3):
-#         x = int(a * y * y + b * y + c)
-#         if 0 <= x < w:
-#             if prev_x is not None:
-#                 img.draw_line(prev_x, prev_y, x, y, color=val, thickness=1)
-#             prev_x, prev_y = x, y
+
+def draw_intersection_boxes(img, inter):
+    """
+    在灰度图上绘制路口检测框和结果
+
+    绘制内容:
+      - 中间区域一排检测框 (1=白色边, 0=灰色边)
+      - 框内标注 1/0
+      - 框下方标注检测结果 (CROSS / T-LEFT / T-RIGHT / -)
+
+    参数:
+        img  : 已二值化的灰度图
+        inter: IntersectionDetector 实例
+    """
+    from intersection import IntersectionDetector
+
+    w = img.width()
+    h = img.height()
+    num  = IntersectionDetector.NUM_BOXES
+    x0_r = IntersectionDetector.BOX_LEFT_MARGIN
+    x1_r = w - IntersectionDetector.BOX_RIGHT_MARGIN
+    region_w = x1_r - x0_r
+    box_w = region_w // num
+    box_y = IntersectionDetector.BOX_Y_OFFSET
+    box_h = IntersectionDetector.BOX_HEIGHT
+
+    # -- 画左边距分隔线 --
+    img.draw_line(x0_r - 1, box_y, x0_r - 1, box_y + box_h,
+                  color=GRAY_DARK, thickness=1)
+    img.draw_line(x1_r, box_y, x1_r, box_y + box_h,
+                  color=GRAY_DARK, thickness=1)
+
+    # -- 画框 + 标 0/1 --
+    FONT_SIZE = 10
+    for i in range(num):
+        x0 = x0_r + i * box_w
+        x1 = min(x0 + box_w, x1_r) - 1
+        y1 = min(box_y + box_h, h) - 1
+
+        color = GRAY_WHITE if inter.box_active[i] else GRAY_MEDIUM
+        img.draw_rectangle(x0, box_y, x1 - x0, y1 - box_y,
+                           color=color, thickness=1)
+
+        label = "1" if inter.box_active[i] else "0"
+        label_color = GRAY_WHITE if inter.box_active[i] else GRAY_DARK
+        img.draw_string_advanced(x0 + 2, box_y + 1, FONT_SIZE,
+                                  label, color=label_color)
+
+    # -- 框下方标注检测结果 --
+    result_y = box_y + box_h + 4
+    img.draw_string_advanced(2, result_y, FONT_SIZE,
+                              "INT:%s" % inter.box_result,
+                              color=GRAY_WHITE)

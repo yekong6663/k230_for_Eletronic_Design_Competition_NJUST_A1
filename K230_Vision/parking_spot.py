@@ -59,3 +59,7 @@ class ParkingSpotDetector(Detector):
             "x": 0, "y": 0, "w": 0, "angle": 0,
             "found": False
         }
+
+    def SendToUart(self):
+        """发送停车位检测结果 (待实现)"""
+        pass

@@ -47,3 +47,7 @@ class GateDetector(Detector):
     def Reset(self):
         """重置道闸检测器状态"""
         self._result = {"status": 0}
+
+    def SendToUart(self):
+        """发送道闸检测结果 (待实现)"""
+        pass

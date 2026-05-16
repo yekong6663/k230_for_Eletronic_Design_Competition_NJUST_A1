@@ -3,40 +3,40 @@ K230 视觉系统 —— 主入口
 
 功能:
   - 初始化摄像头、UART、所有检测器
-  - 主循环: 取图 → 车道线检测 → 发送结果 → 接收 M0 指令切换模式
-  - 当前已实现: 车道线巡线
-  - 后续待叠加: 红绿灯 / 路口 / 停车位 / 道闸
+  - 主循环: 取图 → 车道线检测 → 显示 → 接收指令
+  - 路口检测在独立线程运行 (小核)
 
 框架:
-  - 所有检测器继承 Detector 基类，统一 Init() / Process() / GetResult() 接口
-  - 主循环使用 while True + try-except 保证异常可恢复
+  - 所有检测器继承 Detector 基类
+  - 每个检测器通过 SendToUart() 自行发送结果
 """
 
-import sensor
-import image
+import _thread
 import time
+import os
+import image
+from media.sensor import *
+from media.display import *
+from media.media import *
 import config
 from uart_protocol import UartProtocol
 from lane_detect import LaneDetector
-from traffic_light import TrafficLightDetector
 from intersection import IntersectionDetector
 from parking_spot import ParkingSpotDetector
 from gate_detect import GateDetector
-from visualizer import draw_lane_hud
+from visualizer import draw_lane_hud, draw_lane_overlay, draw_intersection_boxes
 
 # ============================================================
-# 模式常量 — M0 发来的指令码映射到工作模式
+# 模式常量
 # ============================================================
 
-# M0 → K230 指令码 (1 字节)
-CMD_LANE  = 0x10    # 巡线模式
-CMD_INTER = 0x11    # 路口检测模式
-CMD_PARK  = 0x12    # 停车位检测模式
-CMD_LIGHT = 0x13    # 红绿灯检测模式
-CMD_GATE  = 0x14    # 道闸识别模式
-CMD_IDLE  = 0x15    # 空闲模式
+CMD_LANE  = 0x10
+CMD_INTER = 0x11
+CMD_PARK  = 0x12
+CMD_LIGHT = 0x13
+CMD_GATE  = 0x14
+CMD_IDLE  = 0x15
 
-# 指令码 → 模式名 映射表
 CMD_TO_MODE = {
     CMD_LANE:  "LANE",
     CMD_INTER: "INTER",
@@ -46,6 +46,26 @@ CMD_TO_MODE = {
     CMD_IDLE:  "IDLE",
 }
 
+# ============================================================
+# 路口检测线程 — 共享数据
+# ============================================================
+
+_inter_img   = None      # 主线程写入的二值化图像副本
+_inter_ready = False     # True = 新帧就绪
+
+
+def _InterThread(inter):
+    """路口检测线程 (运行在小核上)"""
+    global _inter_img, _inter_ready
+
+    while True:
+        if _inter_ready:
+            img = _inter_img
+            _inter_ready = False
+            inter.Process(img, [], [])
+            inter.SendToUart()
+        time.sleep_ms(5)
+
 
 # ============================================================
 # 系统初始化
@@ -53,63 +73,62 @@ CMD_TO_MODE = {
 
 
 def _InitSensor():
-    """
-    初始化摄像头
-
-    配置: RGB565 色彩, QVGA (320×240), 50fps
-    开启自动白平衡和自动曝光，适应场地光照变化。
-    """
-    sensor.reset()                          # 复位摄像头
-    sensor.set_pixformat(sensor.RGB565)     # 色彩格式: RGB565
-    sensor.set_framesize(sensor.QVGA)       # 分辨率: 320×240
-    sensor.set_auto_whitebal(True)          # 自动白平衡 (色温自适应)
-    sensor.set_auto_exposure(True)          # 自动曝光 (亮度自适应)
-    sensor.set_framerate(config.FPS)        # 帧率: 50fps
-    sensor.skip_frames(20)                  # 跳过启动初期的 20 帧 (曝光不稳定)
+    """初始化摄像头: GRAYSCALE, 400×240, 90fps"""
+    sensor = Sensor(
+        id=config.SENSOR_ID,
+        width=config.IMAGE_WIDTH,
+        height=config.IMAGE_HEIGHT,
+        fps=config.FPS,
+    )
+    sensor.reset()
+    sensor.set_hmirror(False)
+    sensor.set_vflip(False)
+    sensor.set_framesize(width=config.IMAGE_WIDTH, height=config.IMAGE_HEIGHT,
+                         chn=CAM_CHN_ID_0)
+    sensor.set_pixformat(Sensor.GRAYSCALE, chn=CAM_CHN_ID_0)
+    sensor.run()
+    time.sleep_ms(500)
+    return sensor
 
 
 def _InitAll():
-    """
-    初始化全部模块并返回实例
+    """初始化全部模块"""
+    MediaManager.init()
 
-    执行顺序:
-      1. 摄像头初始化
-      2. 通讯协议实例化 (UART)
-      3. 各检测器实例化 + Init()
+    sensor = _InitSensor()
+    uart   = UartProtocol()
 
-    返回:
-        (uart, lane, light, inter, park, gate) 六个模块实例
-    """
-    # -- 摄像头 --
-    _InitSensor()
-
-    # -- 通讯协议 (UART1, 115200bps) --
-    uart = UartProtocol()
-
-    # -- 检测器: 实例化 + 初始化 --
     lane  = LaneDetector()
-    light = TrafficLightDetector()
     inter = IntersectionDetector()
     park  = ParkingSpotDetector()
     gate  = GateDetector()
 
-    # 每个检测器调用 Init() 设置内部状态
+    # 注入 UART
+    lane.SetUart(uart)
+    inter.SetUart(uart)
+    park.SetUart(uart)
+    gate.SetUart(uart)
+
+    # 初始化
     lane.Init()
-    light.Init()
     inter.Init()
     park.Init()
     gate.Init()
 
-    # -- 启动日志 --
+    # -- 启动路口检测线程 --
+    _thread.start_new_thread(_InterThread, (inter,))
+
+    # -- 日志 --
     print("=" * 48)
     print("  K230 Vision System — NJUST A1")
-    print("  Resolution : %dx%d @ %d fps" % (config.IMAGE_WIDTH, config.IMAGE_HEIGHT, config.FPS))
+    print("  Resolution : %dx%d @ %d fps" % (
+        config.IMAGE_WIDTH, config.IMAGE_HEIGHT, config.FPS))
     print("  UART%d      : %d bps" % (config.UART_ID, config.UART_BAUD))
-    print("  Detectors  : Lane / Light / Inter / Park / Gate")
-    print("  Mode       : LANE (巡线)")
+    print("  Detectors  : Lane / Inter / Park / Gate")
+    print("  Threads    : Main + Inter(LittleCore)")
     print("=" * 48)
 
-    return uart, lane, light, inter, park, gate
+    return sensor, uart, lane, inter, park, gate
 
 
 # ============================================================
@@ -118,121 +137,96 @@ def _InitAll():
 
 
 def Main():
-    """
-    K230 视觉系统主循环
+    sensor, uart, lane, inter, park, gate = _InitAll()
 
-    流程:
-      while True:
-        1. clock.tick()  — 开始帧计时
-        2. 取一帧图像
-        3. 车道线检测 (始终运行)
-        4. 根据当前 mode 调用对应检测器 (待接入)
-        5. 检查 M0 指令切换模式
-        6. 异常捕获 → 短暂延迟后继续 (不死机)
+    # -- 显示初始化 --
+    if config.DISPLAY_MODE == "LCD":
+        disp_w, disp_h = config.LCD_WIDTH, config.LCD_HEIGHT
+        Display.init(Display.ST7701, width=disp_w, height=disp_h, to_ide=True)
+        disp_img = image.Image(disp_w, disp_h, image.ARGB8888)
+    elif config.DISPLAY_MODE == "HDMI":
+        disp_w, disp_h = 1920, 1080
+        Display.init(Display.LT9611, width=disp_w, height=disp_h, to_ide=True)
+        disp_img = image.Image(disp_w, disp_h, image.ARGB8888)
+    else:
+        disp_w, disp_h = config.IMAGE_WIDTH, config.IMAGE_HEIGHT
+        Display.init(Display.VIRT, width=disp_w, height=disp_h, to_ide=True)
+        disp_img = None
 
-    帧率受 sensor.set_framerate() 限制为 50fps。
-    每次 snapshot() 会阻塞直到新帧就绪。
-    """
-    # -- 初始化所有硬件和检测器 --
-    uart, lane, light, inter, park, gate = _InitAll()
-
-    # -- 时钟对象，用于统计帧率和帧间隔 --
     clock = time.clock()
+    mode  = "LANE"
 
-    # -- 默认模式: 巡线 --
-    mode = "LANE"
+    global _inter_img, _inter_ready
 
     # ================================================================
     # 主循环
     # ================================================================
-    while True:
-        # ---- 开始帧计时 (记录本帧开始时刻) ----
-        clock.tick()
+    try:
+        while True:
+            clock.tick()
 
-        try:
-            # ---- ① 取一帧图像 ----
-            # snapshot() 会阻塞，直到摄像头曝光完成返回新帧
-            img = sensor.snapshot()
+            try:
+                # ---- ① 取帧 + 车道线检测 (原地二值化) ----
+                img = sensor.snapshot(chn=CAM_CHN_ID_0)
+                lane_result = lane.Process(img)
 
-            # ---- ② 车道线检测 (始终运行，所以所有模式都有 lane 数据) ----
-            lane_result = lane.Process(img)
+                # ---- ② 发送车道线结果 ----
+                lane.SendToUart()
 
-            if lane_result["valid"]:
-                # 双线有效 → 发送正常数据
-                uart.SendLane(
-                    lane_result["offset"],
-                    lane_result["angle"],
-                    True
-                )
-            else:
-                # 丢线 → 发送无效标记 (M0 侧根据 valid 做降速/停车)
-                uart.SendLane(0.0, 0.0, False)
+                # ---- ③ 提交二值化帧给路口检测线程 ----
+                if not _inter_ready:
+                    _inter_img = img.copy()
+                    _inter_ready = True
 
-            # ---- ②.5 路口检测 (独立模块, 后台持续运行) ----
-            inter_result = inter.Process(
-                img, lane.last_left_coeff, lane.last_right_coeff
-            )
-            inter_type = 0
-            if inter_result is not None:
-                inter_type, inter_dir = inter_result
-                uart.SendIntersection(inter_type, inter_dir)
+                # ---- ④ 可视化叠加层 ----
+                if config.ENABLE_VIZ:
+                    draw_lane_overlay(img, lane)
+                    draw_intersection_boxes(img, inter)
+                    draw_lane_hud(
+                        img,
+                        fps=clock.fps(),
+                        mode=mode,
+                        offset=lane_result["offset"],
+                        angle=lane_result["angle"],
+                        valid=lane_result["valid"],
+                        intersection=inter._result["type"],
+                    )
 
-            # ========================================================
-            # TODO: 以下为后续接入其他检测器的代码框架
-            # ========================================================
-            #
-            # if mode == "LIGHT":
-            #     # 红绿灯检测 (巡线同时扫描)
-            #     light_result = light.Process(img)
-            #     if light_result is not None:
-            #         uart.SendLight(light_result)
-            #
-            # elif mode == "PARK":
-            #     # 停车位检测
-            #     park_result = park.Process(img)
-            #     if park_result is not None:
-            #         uart.SendParkingSpot(*park_result)
-            #
-            # elif mode == "GATE":
-            #     # 道闸识别
-            #     gate_result = gate.Process(img)
-            #     if gate_result is not None:
-            #         uart.SendGate(gate_result)
-            #
-            # ========================================================
+                # ---- ⑤ 显示 ----
+                if disp_img is not None:
+                    disp_img.clear()
+                    disp_img.draw_image(img, 0, 0,
+                                        x_scale=disp_w / img.width(),
+                                        y_scale=disp_h / img.height())
+                    Display.show_image(disp_img)
+                else:
+                    Display.show_image(img)
 
-            # ---- ③ 可视化叠加层 (调试用, 生产时可关闭) ----
-            if config.ENABLE_VIZ:
-                draw_lane_hud(
-                    img,
-                    fps=clock.fps(),
-                    mode=mode,
-                    offset=lane_result["offset"],
-                    angle=lane_result["angle"],
-                    valid=lane_result["valid"],
-                    intersection=inter_type,
-                )
+                # ---- ⑥ 接收 M0 指令 ----
+                cmd = uart.ReadCommand()
+                if cmd is not None and cmd in CMD_TO_MODE:
+                    new_mode = CMD_TO_MODE[cmd]
+                    if new_mode != mode:
+                        mode = new_mode
+                        print("[Mode] 切换到:", mode)
 
-            # ---- ④ 接收 M0 指令，切换工作模式 ----
-            cmd = uart.ReadCommand()
-            if cmd is not None and cmd in CMD_TO_MODE:
-                new_mode = CMD_TO_MODE[cmd]
-                if new_mode != mode:
-                    mode = new_mode
-                    print("[Mode] 切换到:", mode)
+            except Exception as e:
+                print("[Error]", e)
+                time.sleep_ms(10)
 
-        except Exception as e:
-            # 异常捕获: 打印错误信息，短暂延迟后继续
-            # 防止单帧处理异常导致整个系统崩溃
-            print("[Error]", e)
-            time.sleep_ms(10)      # 等待 10ms 让日志输出完成
+            os.exitpoint()
 
-        # ---- 可选: 打印帧率 (调试用) ----
-        # print("FPS:", clock.fps())
+    except KeyboardInterrupt:
+        print("用户终止")
+    finally:
+        Display.deinit()
+        os.exitpoint(os.EXITPOINT_ENABLE_SLEEP)
+        time.sleep_ms(100)
+        MediaManager.deinit()
 
 
 # ============================================================
-# 程序入口 — 上电自动执行
+# 程序入口
 # ============================================================
 
 if __name__ == "__main__":
